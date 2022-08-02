@@ -99,10 +99,10 @@ no_na <- function(x) ifelse(is.na(x), 0, x)
 
 
 # function for random time selection per day. t_laps = min time between consec pic
-rnd2.sample <- function(avail=all_times, int_per_day=int_per_day, t_laps=t_laps) {
+rnd2.sample <- function(avail=all_times, n_timelapse=n_timelapse, t_laps=t_laps) {
   
   jj <- 1
-  tsamp <- rep(NA,int_per_day)
+  tsamp <- rep(NA,n_timelapse)
   
   while (length(avail) > 0) {
     t <- sample(avail, size = 1)
@@ -117,9 +117,9 @@ rnd2.sample <- function(avail=all_times, int_per_day=int_per_day, t_laps=t_laps)
 } # end function
 
 # function for regular time selection per day
-rnd.sample <- function(avail=all_times, int_per_day=int_per_day) {
+rnd.sample <- function(avail=all_times, n_timelapse=n_timelapse) {
   
-  t <- sample(length(avail), size = int_per_day)
+  t <- sample(length(avail), size = n_timelapse)
   tsamp <- avail[t] %>% strftime(format = "%H:%M:%S", tz = "UTC")
   tsamp <- list(tsamp)
   return(tsamp)
@@ -129,9 +129,9 @@ rnd.sample <- function(avail=all_times, int_per_day=int_per_day) {
 
 
 # function for regular time selection per day
-reg.sample <- function(avail=all_times, int_per_day=int_per_day) {
+reg.sample <- function(avail=all_times, n_timelapse=n_timelapse) {
   
-  window <- floor(length(avail)/int_per_day -1)
+  window <- floor(length(avail)/n_timelapse -1)
   tsamp <- c(0:(int_per_day-1))*window
   t <- sample(0:window, size = 1)
   tsamp <- tsamp + t
