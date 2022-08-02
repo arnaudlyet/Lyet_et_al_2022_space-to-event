@@ -1,4 +1,3 @@
-
   # Exponential log likelihood
   exp_logl_fn <- function(data, param){
     # param: beta parameter for lambda
@@ -53,7 +52,3 @@
                 UCI_N  = estN + SE_N * 1.96) )
 
   }
-
-  
-  
-  
