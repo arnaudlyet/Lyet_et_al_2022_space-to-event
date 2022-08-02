@@ -12,6 +12,8 @@ library(SpatialEpi)
 library(unmarked)
 library(modelr)
 library(AICcmodavg)
+library(knitrProgressBar)
+
 
 
 # Source general function in global environment 
@@ -140,6 +142,16 @@ reg.sample <- function(avail=all_times, n_timelapse=n_timelapse) {
   return(tsamp)
 } # end function
 
+# function to update progress bar. borrowed from example by @hrbrmstr
+arduously_long_nchar <- function(input_var, .pb=NULL) {
+  
+  update_progress(.pb)
+  
+  Sys.sleep(0.5)
+  
+  nchar(input_var)
+  
+}
 
 
 
