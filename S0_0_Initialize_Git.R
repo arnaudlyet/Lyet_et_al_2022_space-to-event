@@ -13,6 +13,7 @@ library(unmarked)
 library(modelr)
 library(AICcmodavg)
 library(knitrProgressBar)
+library(ggplot2)
 
 
 
