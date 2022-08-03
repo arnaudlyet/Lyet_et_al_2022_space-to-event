@@ -1,0 +1,257 @@
+---
+title: "R code and example for Space-To-Event model with Bootstrap resampling"
+author: "Arnaud Lyet and Thierry Chambert"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+  css: styles.css
+  #word_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE,
+                      tidy = TRUE)
+```
+
+
+```{r, echo = FALSE}
+rm(list = ls(all = T))
+```
+
+
+### Load packages, source files and data:
+```{r, include = TRUE}
+# packages
+library(devtools)
+
+# Load source files, functions and data
+source_url("https://raw.githubusercontent.com/arnaudlyet/Lyet_et_al_2022_space-to-event/main/S0_0_Initialize_Git.R")
+load("BC_dataset.RData")
+```
+
+
+# Data prep, period adjustment and declaration of variables and parameters
+
+### Check the data
+```{r, echo = FALSE}
+# Subset data for that species only
+species <- unique(dat0$common_name)[1]
+dat <- dat0
+kable(head(dat)) # Check data
+```
+
+
+
+### Check daily activity pattern and visually select the peak activity period for analysis
+```{r, echo = FALSE}
+temp <-  data.frame(date.time = as.POSIXct(strptime(dat$time, "%H:%M:%S")))
+ggplot(data = temp, aes(x = date.time)) + 
+  geom_histogram(colour = "black", fill="gray90", binwidth = 3600, boundary = 0) +
+  scale_x_datetime(date_labels = "%H:%M") +
+  labs(title = NULL, x = "Time of Day", y = "Observations Count") +
+  theme(legend.position = "none") +
+  theme_classic() + theme(axis.text.x = element_text(angle=0), 
+                          axis.title=element_text(size=rel(1.5)))
+```
+
+### Select appropriate period of peak activity for the analysis
+```{r, include = TRUE}
+# Pick the earliest and latest times
+tstart_txt <- "03:00:00" 
+tend_txt <- "23:59:59"
+time_start <- parse_date_time(paste(tstart_txt, "UTC"), "HMS")
+time_end <- parse_date_time(paste(tend_txt, "UTC"), "HMS")
+
+# Pick times to remove possible inactivity period. Times chosen equals if no inactivity period. 
+tbkstart_txt <- "12:00:00"  
+tbkend_txt <- "19:00:00"
+time_break_start <-  parse_date_time(paste(tbkstart_txt, "UTC"), "HMS")
+time_break_end <- parse_date_time(paste(tbkend_txt, "UTC"), "HMS")
+
+# Calculate total available time per day in min and seconds
+period1 <- period_to_seconds(hms(tend_txt)) + 1 - period_to_seconds(hms(tstart_txt))
+period2 <- period_to_seconds(hms(tbkend_txt)) - period_to_seconds(hms(tbkstart_txt))
+
+tot.seconds <- (period1 - period2)
+tot.minutes <- tot.seconds / 60 # total numbers of minutes
+
+```
+
+
+### Declare the parameters of the model
+```{r, include = TRUE}
+Area = 1 # area for the report of the density estimate (in square km)
+
+Nboot = 50 # total number of bootstraps
+det.period = 1 # duration of the window of detection (in second)
+interval <- 10 # average time between two consecutive time-lapse (in minutes)
+
+# number of daily time-lapses (detection events)
+(n.timelapse <- floor(tot.minutes / interval))
+```
+
+
+### Summarizes the observations for each time period (here per second) 
+```{r, include = TRUE}
+period = paste(det.period, "sec") # in seconds
+tmp <- as.POSIXct(dat$time, format = "%H:%M:%S", tz = "UTC") 
+
+# group the observations by period of x seconds
+dat$time <- strftime(floor_date(tmp, unit = period), format = "%H:%M:%S", tz = "UTC") 
+dat <- dat %>% group_by(cam, common_name, date, time) %>%
+  summarize(n = sum(n))
+```
+
+
+
+### Declare objects for detection matrix and to store estimates' results
+```{r, include = TRUE}
+# declare detection matrix for each possible time-lapses
+detec <- matrix(NA, nrow = nrow(activ), ncol = ncol(activ) * n.timelapse,
+    dimnames = list(rownames(activ), NULL))
+# expand the activity/inactivity status of the camera to each time lapse
+for (j in 1:ncol(activ)) {  
+  idx = (j - 1) * n.timelapse + (1:n.timelapse)
+  detec[, idx] <- activ[, j]
+} # j
+
+# declare object to store STE estimates
+STE <- data.frame(Iter = 1:Nboot, NbDet = NA, EST = NA, SE = NA)
+```
+
+
+
+# Data analysis
+```{r, echo = FALSE}
+select <- function(x, index) x[index]
+```
+
+
+### Identify all possible HH:MM:SS during the day that fall within the peak activity period
+```{r, include = TRUE}
+all_times <- seq(time_start, time_end, by = period)
+if (time_break_start != time_break_end) {
+  all_times <- all_times[-which(all_times %in% seq(time_break_start, time_break_end, by = period))]
+}
+```
+
+
+### The time-lapse and bootstrap resampling is as follow:
+### (1) Sample n random daily time-lapses (n.timelapse) from all the available HH:MM:SS. ### (2) The same time-lapses are used for each day of the survey.
+### (3) Operation 1 and 2 are repeated as many times as the number of bootstrap chosen (Nboot). 
+```{r, include = TRUE}
+sel_times <- replicate(n = Nboot, rnd.sample(avail = all_times, n_timelapse = n.timelapse))
+```
+
+
+
+### Loop over all k bootstrap iterations. Increment the progress in the console and update the detail text.
+```{r, include = TRUE}
+pb <- progress_estimated(Nboot)
+k = 1
+for (k in 1:Nboot) {
+
+  # Increment the progress bar.
+  purrr::map_int(Nboot, arduously_long_nchar, .pb = pb)
+
+  # Go over the k sampled times (within 1 day) for "instant" (n seconds) snapshots
+  photo_time <- sel_times[[k]]
+  
+  # Select only detection that occurred at photo times
+  sel <- which(as.character(dat$time) %in% photo_time)
+  
+  # Reduce the dataset to only keep detection at photo time
+  dat.sel <- unique(dat[sel, c("common_name", "date", "time", "cam", "n")])
+  
+  # Where and when detection happened
+  detec <- detec
+  for (i in 1:nrow(dat.sel)) {
+    rw <- which(station == as.character(dat.sel$cam)[i])
+    c1 <- which(survey_day == as.integer(ymd(dat.sel$date[i])))
+    c2 <- which(photo_time == as.character(dat.sel$time[i]))
+    cl <- ((c1 - 1) * n.timelapse) + c2
+    detec[rw, cl] <- no_na(detec[rw, cl]) + 1
+    rm(rw)
+    rm(cl)
+  } # i
+  
+  n_det <- sum(detec, na.rm = TRUE)
+  STE[k, "NbDet"] <- n_det
+  
+  # Estimation of density
+  # Remove Occasions (days) with no active camera
+  nb_cam <- apply(detec, 2, len_no_na)
+  photo = detec[, nb_cam > 0] # select columns with active cam
+  
+  # Redefine nb of active cameras per occasion, removing case of 0 active camera
+  nb_cam <- apply(photo, 2, len_no_na) # recreate vector of active cams per occ
+  
+  # Find total area of active cameras at each occasion
+  # Reset detection file
+  detec[detec > 0] <- 0
+  active.area.tmp <- (detec + 1) * cta[[1]]
+  areaCam <- apply(active.area.tmp, 2, sum, na.rm = T)
+  # should I remove the ones with no camera?
+  
+  ## Data
+  S = NA
+  # this line below resamples the camera active on this date
+  for (p in 1:ncol(photo)) {
+    S[p] <-
+      get_Sja(rm_na(photo[, p])[sample(length(rm_na(photo[, p])))])
+  }
+  
+  dat_ste <-
+    list(toevent = matrix(S, ncol = ncol(photo)),
+         censor = areaCam,
+         A = Area)
+
+  # Estimate abundance with Space-to-Event
+  run = STE_estN_fn(dat_ste, -10, 10)
+  EST_N = run$estN
+  SE_N = run$SE_N
+  
+  # Save output
+  fill_col <- which(is.na(STE[k, ]))
+  STE[k, fill_col] <- c(EST_N, SE_N)
+
+} # k
+```
+
+
+# Results
+
+### Summarize results for STE
+```{r, echo = FALSE}
+nZeros <- sum(STE$NbDet == 0) / Nboot
+STE_EST_N <- mean(STE$EST) / Area
+STE_SE_N <- mean(STE$SE) / Area
+STE_CI_N <- quantile(STE$EST, probs = c(0.025, 0.975)) / Area
+avg_grp_size <- mean(dat[["n"]], na.rm = TRUE)
+effort <- sum(activ)
+nObs   <- nrow(dat0)
+timeTotal <- tot.seconds
+
+# Get bootstrap averaged results
+resSTE <-
+  data.frame(
+    Species = species,
+    N_timelapse = n.timelapse,
+    N_Zeros = nZeros,
+    Density = STE_EST_N,
+    SE = STE_SE_N,
+    Lower_95p_CI = STE_CI_N[1],
+    Upper_95p_CI = STE_CI_N[2]
+  )
+
+```
+
+
+### Table results STE
+```{r, echo = FALSE}
+kable(resSTE)
+```
